@@ -1,78 +1,111 @@
 const mineflayer = require('mineflayer');
-const readline = require('readline');
+const fs = require('fs');
 
-// Buat interface untuk membaca input dari terminal
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
+// Membaca file konfigurasi config.json
+const config = JSON.parse(fs.readFileSync('config.json', 'utf8'));
+
+// Membuat bot dengan pengaturan dari config.json
+const bot = mineflayer.createBot({
+  host: config.host,       // Alamat server Minecraft
+  port: config.port,       // Port server Minecraft
+  username: config.username, // Username bot
+  version: config.version  // Menetapkan versi Minecraft
 });
 
-// Tanya pengguna untuk memasukkan data
-rl.question('What is the IP of your server? ', (host) => {
-  rl.question('What is the port of your server? ', (port) => {
-    rl.question('What is the username for your bot? ', (username) => {
-      rl.question('What is the password for your bot? ', (password) => {
-        rl.question('What is the version of your server? ', (version) => {
-          rl.close();
-          startBot({ host, port: parseInt(port, 10), username, password, version });
-        });
-      });
-    });
-  });
-});
-
-// Fungsi untuk membuat bot
-function startBot({ host, port, username, password, version }) {
-  function createBot(botNumber = 1) {
-    const bot = mineflayer.createBot({
-      host,
-      port,
-      username: `${username}${botNumber}`, // Tambahkan nomor bot untuk membedakan username
-      version,
-    });
-
-    handleBot(bot, botNumber);
-
-    bot.on('end', () => {
-      console.log(`Bot ${bot.username} disconnected. Reconnecting in 5 seconds...`);
-      setTimeout(() => createBot(botNumber), 5000); // Reconnect setelah 5 detik
-    });
-
-    bot.on('error', (err) => console.log(`Error on bot ${bot.username}: ${err}`));
-  }
-
-  // Jalankan bot pertama kali
-  createBot();
-}
-
-// Fungsi untuk menangani login dan aktivitas bot
-function handleBot(bot, botNumber) {
-  bot.on('login', () => {
-    bot.chat(`/login ${password}`); // Perintah login
-    bot.chat(`/register ${password} ${password}`); // Perintah register jika belum terdaftar
-
-    console.log(`Bot ${bot.username} successfully logged in.`);
-    startAntiAfk(bot);
-    randomWalk(bot);
+// Fungsi untuk menangani bot saat spawn (login dan registrasi otomatis)
+function handleBot(bot) {
+  bot.on("login", () => {
+    bot.chat("/login p@ssword123");         // Login dengan password langsung
+    bot.chat('/register p@ssword123 p@ssword123');  // Registrasi dengan password langsung
   });
 }
 
-// Fungsi anti-AFK
-function startAntiAfk(bot) {
+// Fungsi untuk menjaga bot tetap aktif (anti-AFK)
+function antiAfk() {
   setInterval(() => {
-    bot.swingArm('right'); // Mengayunkan tangan
-    bot.setControlState('jump', true); // Melompat
-    setTimeout(() => bot.setControlState('jump', false), 500); // Berhenti melompat setelah durasi tertentu
-  }, 30000); // Ulangi setiap interval
+    const directions = ['forward', 'back', 'left', 'right'];
+    const randomDirection = directions[Math.floor(Math.random() * directions.length)];
+
+    bot.setControlState(randomDirection, true);
+    setTimeout(() => {
+      bot.setControlState(randomDirection, false);
+    }, Math.floor(Math.random() * (4000 - 1000) + 1000)); // Gerakkan acak selama 1-4 detik
+  }, 10000); // Setiap 10 detik
 }
 
-// Fungsi untuk bergerak secara acak
-function randomWalk(bot) {
-  const directions = ['forward', 'back', 'left', 'right'];
-
+// Fungsi untuk melompati lebih dari satu blok
+function jumpOverBlocks() {
   setInterval(() => {
-    const direction = directions[Math.floor(Math.random() * directions.length)];
-    bot.setControlState(direction, true);
-    setTimeout(() => bot.setControlState(direction, false), 1000); // Berhenti setelah durasi tertentu
-  }, 10000); // Ulangi setiap interval
+    const blockInFront = bot.blockAt(bot.entity.position.offset(0, 0, 1));
+    const blockAbove = bot.blockAt(bot.entity.position.offset(0, 1, 1));
+
+    if ((blockInFront && blockInFront.name !== 'air') || (blockAbove && blockAbove.name !== 'air')) {
+      bot.jump(); // Lompat jika ada blok di depan atau di atas
+    }
+  }, 1000); // Cek setiap detik
 }
+
+// Fungsi untuk menghindari lava dan monster
+function avoidLavaAndMonsters() {
+  setInterval(() => {
+    // Cek blok di depan bot untuk lava
+    const blockInFront = bot.blockAt(bot.entity.position.offset(0, 0, 1));
+    const blockBelow = bot.blockAt(bot.entity.position.offset(0, -1, 0));
+
+    // Jika ada lava di depan atau di bawah bot, hindari dengan mundur atau bergerak ke samping
+    if (blockInFront && blockInFront.name === 'lava' || blockBelow && blockBelow.name === 'lava') {
+      bot.setControlState('back', true);
+      setTimeout(() => bot.setControlState('back', false), 500); // Mundur selama 500ms
+    }
+
+    // Cek jika ada monster di sekitar bot
+    const nearbyEntities = bot.entities;
+    Object.keys(nearbyEntities).forEach((entityId) => {
+      const entity = nearbyEntities[entityId];
+      // Jika ada monster yang mendekat, hindari dengan bergerak
+      if (entity.mobType && entity.mobType !== 'Player') {
+        const dx = entity.position.x - bot.entity.position.x;
+        const dz = entity.position.z - bot.entity.position.z;
+        if (Math.abs(dx) < 3 && Math.abs(dz) < 3) {
+          bot.setControlState('back', true);  // Mundur jika terlalu dekat dengan monster
+          setTimeout(() => bot.setControlState('back', false), 1000); // Mundur selama 1 detik
+        }
+      }
+    });
+  }, 1000); // Cek setiap detik
+}
+
+// Fungsi untuk menghindari tenggelam
+function avoidDrowning() {
+  setInterval(() => {
+    if (bot.entity.position.y < 0) {
+      bot.setControlState('jump', true); // Lompat untuk menghindari tenggelam
+      setTimeout(() => bot.setControlState('jump', false), 500); // Lompat selama 500ms
+    }
+  }, 1000); // Cek setiap detik
+}
+
+// Event ketika bot berhasil spawn
+bot.on('spawn', () => {
+  console.log('Bot telah berhasil masuk ke server!');
+  handleBot(bot); // Menangani login dan registrasi saat spawn
+  antiAfk();      // Aktifkan anti-AFK
+  jumpOverBlocks(); // Aktifkan fitur melompati blok
+  avoidLavaAndMonsters(); // Hindari lava dan monster
+  avoidDrowning(); // Hindari tenggelam
+});
+
+// Event untuk menangani pesan dari chat server
+bot.on('message', (message) => {
+  // Tanpa log
+});
+
+// Event ketika bot terputus dari server
+bot.on('end', () => {
+  console.log('Bot telah terputus dari server!');
+});
+
+// Event ketika bot gagal untuk terhubung ke server
+bot.on('error', (err) => {
+  console.log('Terjadi error: ' + err);
+});
